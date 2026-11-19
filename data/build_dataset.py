@@ -1,0 +1,290 @@
+"""
+Builds the CineMind dataset:
+  - data/movies.csv   : curated catalogue of well-known films (metadata + original short overviews)
+  - data/ratings.csv  : synthetic-but-structured user ratings (latent taste clusters + noise)
+
+Why synthetic ratings?
+  Real rating datasets (MovieLens etc.) cannot be bundled/downloaded in every environment.
+  The generator below creates users who belong to hidden taste "personas" so that
+  collaborative filtering has genuine signal to learn. To use MovieLens instead,
+  see README -> "Swapping in a real dataset".
+
+Run:  python data/build_dataset.py
+"""
+import csv
+import os
+import random
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+# title ; year ; genres ; director ; cast ; runtime ; keywords ; overview ; rating(0-10)
+RAW = """
+The Shawshank Redemption;1994;Drama;Frank Darabont;Tim Robbins|Morgan Freeman|Bob Gunton;142;prison|hope|friendship|escape;A quiet banker serving a life sentence befriends a fellow inmate and spends decades quietly planning his way to freedom.;9.3
+The Godfather;1972;Crime|Drama;Francis Ford Coppola;Marlon Brando|Al Pacino|James Caan;175;mafia|family|power|loyalty;An aging crime patriarch hands his empire to a reluctant son who is slowly consumed by the family business.;9.2
+The Dark Knight;2008;Action|Crime|Thriller;Christopher Nolan;Christian Bale|Heath Ledger|Aaron Eckhart;152;batman|joker|chaos|vigilante;A masked vigilante faces an anarchic criminal mastermind who wants to prove that order is only an illusion.;9.0
+Pulp Fiction;1994;Crime|Drama;Quentin Tarantino;John Travolta|Samuel L. Jackson|Uma Thurman;154;hitmen|nonlinear|dark humor|los angeles;Intersecting stories of hitmen, a boxer and a gangster's wife unfold out of order across one strange, violent city.;8.9
+Schindler's List;1993;Biography|Drama|War;Steven Spielberg;Liam Neeson|Ben Kingsley|Ralph Fiennes;195;holocaust|moral choice|world war ii|rescue;A businessman in occupied Poland slowly turns his factory into a refuge for hundreds of doomed workers.;9.0
+Forrest Gump;1994;Comedy|Drama|Romance;Robert Zemeckis;Tom Hanks|Robin Wright|Gary Sinise;142;innocence|american history|love|destiny;A gentle man with a low IQ drifts through decades of American history, unknowingly touching every major event.;8.8
+Inception;2010;Action|Sci-Fi|Thriller;Christopher Nolan;Leonardo DiCaprio|Joseph Gordon-Levitt|Elliot Page;148;dreams|heist|subconscious|mind bending;A thief who steals secrets from dreams is offered one last job: planting an idea inside a target's mind.;8.8
+The Matrix;1999;Action|Sci-Fi;The Wachowskis;Keanu Reeves|Laurence Fishburne|Carrie-Anne Moss;136;simulation|chosen one|hacker|reality;A hacker discovers that his world is a simulation and joins a rebellion against the machines that built it.;8.7
+Goodfellas;1990;Biography|Crime|Drama;Martin Scorsese;Ray Liotta|Robert De Niro|Joe Pesci;145;mafia|rise and fall|new york|betrayal;A young man rises through the ranks of the mob, enjoying the thrills until paranoia and betrayal close in.;8.7
+Fight Club;1999;Drama|Thriller;David Fincher;Brad Pitt|Edward Norton|Helena Bonham Carter;139;anarchy|identity|insomnia|twist;An insomniac office worker and a reckless soap salesman start an underground club that spirals into something dangerous.;8.8
+Interstellar;2014;Adventure|Drama|Sci-Fi;Christopher Nolan;Matthew McConaughey|Anne Hathaway|Jessica Chastain;169;space travel|black hole|time dilation|father daughter;As Earth fades, a former pilot leads a mission through a wormhole to find humanity a new home.;8.7
+The Lord of the Rings: The Fellowship of the Ring;2001;Adventure|Fantasy;Peter Jackson;Elijah Wood|Ian McKellen|Viggo Mortensen;178;quest|ring|middle earth|fellowship;A humble hobbit inherits a dangerous ring and sets out with eight companions to destroy it.;8.8
+The Lord of the Rings: The Return of the King;2003;Adventure|Fantasy|War;Peter Jackson;Elijah Wood|Viggo Mortensen|Ian McKellen;201;epic battle|redemption|middle earth|finale;The final march on Mordor begins while armies gather for a last stand to decide the fate of Middle-earth.;9.0
+Star Wars: A New Hope;1977;Action|Adventure|Sci-Fi;George Lucas;Mark Hamill|Harrison Ford|Carrie Fisher;121;rebellion|space opera|farm boy|empire;A farm boy joins a smuggler and a princess to rescue a captured rebel leader and strike at a galactic empire.;8.6
+The Empire Strikes Back;1980;Action|Adventure|Sci-Fi;Irvin Kershner;Mark Hamill|Harrison Ford|Carrie Fisher;124;rebellion|jedi training|betrayal|space opera;The rebels scatter under imperial attack while a young Jedi seeks training and faces a devastating truth.;8.7
+Jurassic Park;1993;Action|Adventure|Sci-Fi;Steven Spielberg;Sam Neill|Laura Dern|Jeff Goldblum;127;dinosaurs|theme park|genetic engineering|survival;A theme park of cloned dinosaurs turns deadly when the security systems fail during a tour.;8.2
+Titanic;1997;Drama|Romance;James Cameron;Leonardo DiCaprio|Kate Winslet|Billy Zane;195;ocean liner|class divide|disaster|love story;A young artist and a society girl fall in love aboard a luxury liner heading toward disaster.;7.9
+Gladiator;2000;Action|Adventure|Drama;Ridley Scott;Russell Crowe|Joaquin Phoenix|Connie Nielsen;155;rome|revenge|arena|betrayal;A betrayed Roman general returns as a gladiator to avenge his murdered family.;8.5
+The Silence of the Lambs;1991;Crime|Horror|Thriller;Jonathan Demme;Jodie Foster|Anthony Hopkins|Scott Glenn;118;serial killer|fbi|psychological|cannibal;A young FBI trainee seeks help from an imprisoned genius killer to catch another murderer on the loose.;8.6
+Se7en;1995;Crime|Mystery|Thriller;David Fincher;Brad Pitt|Morgan Freeman|Gwyneth Paltrow;127;serial killer|seven sins|detective|dark ending;Two detectives hunt a killer who stages his murders around the seven deadly sins.;8.6
+Terminator 2: Judgment Day;1991;Action|Sci-Fi;James Cameron;Arnold Schwarzenegger|Linda Hamilton|Edward Furlong;137;cyborg|time travel|future war|protector;A reprogrammed cyborg is sent back to protect a boy from a more advanced killing machine.;8.6
+Back to the Future;1985;Adventure|Comedy|Sci-Fi;Robert Zemeckis;Michael J. Fox|Christopher Lloyd|Lea Thompson;116;time travel|teenager|delorean|paradox;A teenager is accidentally sent to 1955 and must make sure his parents fall in love to save his own existence.;8.5
+Alien;1979;Horror|Sci-Fi;Ridley Scott;Sigourney Weaver|Tom Skerritt|John Hurt;117;xenomorph|spaceship|survival|claustrophobic;The crew of a deep-space freighter finds that something lethal has followed them aboard.;8.5
+Aliens;1986;Action|Adventure|Sci-Fi;James Cameron;Sigourney Weaver|Michael Biehn|Carrie Henn;137;xenomorph|marines|survivor|sequel;A lone survivor returns to the monster's world with a squad of marines and finds far worse than before.;8.4
+Blade Runner;1982;Sci-Fi|Thriller;Ridley Scott;Harrison Ford|Rutger Hauer|Sean Young;117;replicants|neo noir|dystopia|humanity;A weary detective hunts rogue androids in a rain-soaked future city and begins to question what makes someone human.;8.1
+Blade Runner 2049;2017;Drama|Mystery|Sci-Fi;Denis Villeneuve;Ryan Gosling|Harrison Ford|Ana de Armas;164;replicants|neo noir|dystopia|identity;A new replicant hunter unearths a secret that could plunge a fragile society into chaos.;8.0
+Mad Max: Fury Road;2015;Action|Adventure|Sci-Fi;George Miller;Tom Hardy|Charlize Theron|Nicholas Hoult;120;post apocalypse|chase|desert|rebellion;In a wasteland ruled by a warlord, a fugitive and a drifter race across the desert in one relentless chase.;8.1
+Parasite;2019;Comedy|Drama|Thriller;Bong Joon-ho;Song Kang-ho|Choi Woo-shik|Park So-dam;132;class struggle|con|south korea|dark comedy;A poor family schemes its way into the lives of a wealthy household with consequences nobody expects.;8.5
+Whiplash;2014;Drama|Music;Damien Chazelle;Miles Teller|J.K. Simmons|Paul Reiser;106;drumming|obsession|mentor|ambition;A young drummer is pushed to his limits by a ruthless conservatory instructor.;8.5
+La La Land;2016;Comedy|Drama|Music|Romance;Damien Chazelle;Ryan Gosling|Emma Stone|John Legend;128;jazz|musical|dreams|los angeles;A pianist and an aspiring actress chase their dreams in Los Angeles and find love tested by ambition.;8.0
+The Social Network;2010;Biography|Drama;David Fincher;Jesse Eisenberg|Andrew Garfield|Justin Timberlake;120;startup|facebook|lawsuit|betrayal;A college programmer builds a website that connects the world and loses his friends along the way.;7.8
+The Prestige;2006;Drama|Mystery|Sci-Fi;Christopher Nolan;Christian Bale|Hugh Jackman|Scarlett Johansson;130;magicians|rivalry|obsession|twist;Two rival stage magicians destroy their lives in a bitter contest to create the ultimate illusion.;8.5
+Memento;2000;Mystery|Thriller;Christopher Nolan;Guy Pearce|Carrie-Anne Moss|Joe Pantoliano;113;memory loss|reverse timeline|revenge|twist;A man unable to form new memories uses notes and tattoos to hunt the person who killed his wife.;8.4
+The Departed;2006;Crime|Drama|Thriller;Martin Scorsese;Leonardo DiCaprio|Matt Damon|Jack Nicholson;151;undercover|mole|boston|mob;A cop infiltrates the mob while a gangster's protégé infiltrates the police, and both race to expose the other.;8.5
+Django Unchained;2012;Drama|Western;Quentin Tarantino;Jamie Foxx|Christoph Waltz|Leonardo DiCaprio;165;revenge|slavery|bounty hunter|western;A freed man teams up with a bounty hunter to rescue his wife from a brutal plantation owner.;8.4
+Inglourious Basterds;2009;Adventure|Drama|War;Quentin Tarantino;Brad Pitt|Christoph Waltz|Mélanie Laurent;153;world war ii|revenge|nazis|alternate history;A group of soldiers and a cinema owner plot separate attacks on the Nazi leadership in occupied France.;8.3
+Kill Bill: Vol. 1;2003;Action|Crime|Thriller;Quentin Tarantino;Uma Thurman|Lucy Liu|Daryl Hannah;111;revenge|martial arts|assassin|stylized;A betrayed assassin wakes from a coma and begins a bloody list of vengeance.;8.2
+The Avengers;2012;Action|Adventure|Sci-Fi;Joss Whedon;Robert Downey Jr.|Chris Evans|Scarlett Johansson;143;superheroes|team up|alien invasion|marvel;Earth's mightiest heroes must learn to work together when an alien army threatens New York.;8.0
+Avengers: Endgame;2019;Action|Adventure|Drama;Anthony Russo|Joe Russo;Robert Downey Jr.|Chris Evans|Mark Ruffalo;181;superheroes|time travel|sacrifice|marvel;The surviving heroes attempt a desperate gamble to undo a cosmic catastrophe.;8.4
+Iron Man;2008;Action|Adventure|Sci-Fi;Jon Favreau;Robert Downey Jr.|Gwyneth Paltrow|Jeff Bridges;126;billionaire|armor|marvel|origin;A weapons tycoon builds a powered suit to escape captivity and reinvents himself as a hero.;7.9
+Black Panther;2018;Action|Adventure|Sci-Fi;Ryan Coogler;Chadwick Boseman|Michael B. Jordan|Lupita Nyong'o;134;wakanda|king|marvel|heritage;A new king of a hidden African nation faces a challenger who wants to turn its technology into a weapon.;7.3
+Guardians of the Galaxy;2014;Action|Adventure|Comedy;James Gunn;Chris Pratt|Zoe Saldaña|Dave Bautista;121;space|misfits|marvel|soundtrack;A band of outlaws in space reluctantly join forces to stop a fanatic from seizing a powerful orb.;8.0
+Spider-Man: Into the Spider-Verse;2018;Animation|Action|Adventure;Bob Persichetti|Peter Ramsey|Rodney Rothman;Shameik Moore|Jake Johnson|Hailee Steinfeld;117;multiverse|teen hero|comic style|marvel;A Brooklyn teen becomes Spider-Man and meets others from parallel dimensions who share his mantle.;8.4
+Joker;2019;Crime|Drama|Thriller;Todd Phillips;Joaquin Phoenix|Robert De Niro|Zazie Beetz;122;mental illness|gotham|descent|origin;A struggling clown is pushed by a cruel city toward becoming the face of a violent uprising.;8.4
+Toy Story;1995;Animation|Adventure|Comedy|Family;John Lasseter;Tom Hanks|Tim Allen|Don Rickles;81;toys|friendship|jealousy|pixar;A cowboy doll feels threatened when a flashy space ranger toy becomes his owner's new favorite.;8.3
+Finding Nemo;2003;Animation|Adventure|Comedy|Family;Andrew Stanton;Albert Brooks|Ellen DeGeneres|Alexander Gould;100;ocean|father son|journey|pixar;An anxious clownfish crosses the ocean with a forgetful friend to find his missing son.;8.2
+The Lion King;1994;Animation|Adventure|Drama|Family;Roger Allers|Rob Minkoff;Matthew Broderick|Jeremy Irons|James Earl Jones;88;savanna|coming of age|betrayal|musical;A lion cub flees his kingdom after his father's death and must return to reclaim his place.;8.5
+Up;2009;Animation|Adventure|Comedy|Family;Pete Docter;Ed Asner|Jordan Nagai|Christopher Plummer;96;balloons|elderly|adventure|pixar;A grieving widower ties thousands of balloons to his house and flies to South America with an unexpected stowaway.;8.3
+WALL-E;2008;Animation|Adventure|Family|Sci-Fi;Andrew Stanton;Ben Burtt|Elissa Knight|Jeff Garlin;98;robot|environment|love|pixar;A lonely waste-collecting robot follows a sleek visitor into space and changes humanity's future.;8.4
+Inside Out;2015;Animation|Adventure|Comedy|Family;Pete Docter;Amy Poehler|Phyllis Smith|Bill Hader;95;emotions|childhood|memory|pixar;The emotions inside a young girl's head struggle to keep her happy after a difficult move.;8.1
+Coco;2017;Animation|Adventure|Family|Music;Lee Unkrich;Anthony Gonzalez|Gael García Bernal|Benjamin Bratt;105;day of the dead|music|family|pixar;A boy who dreams of music slips into the land of the dead to uncover his family's past.;8.4
+Spirited Away;2001;Animation|Adventure|Family|Fantasy;Hayao Miyazaki;Rumi Hiiragi|Miyu Irino|Mari Natsuki;125;spirits|bathhouse|coming of age|ghibli;A girl trapped in a spirit world works in a bathhouse to free her parents and find her way home.;8.6
+My Neighbor Totoro;1988;Animation|Family|Fantasy;Hayao Miyazaki;Noriko Hidaka|Chika Sakamoto|Hitoshi Takagi;86;forest spirit|sisters|countryside|ghibli;Two sisters move to the countryside and befriend gentle forest spirits.;8.1
+Princess Mononoke;1997;Animation|Adventure|Fantasy;Hayao Miyazaki;Yoji Matsuda|Yuriko Ishida|Yuko Tanaka;134;nature|war|curse|ghibli;A cursed prince is caught between a forest's wild guardians and a town that is consuming it.;8.3
+Howl's Moving Castle;2004;Animation|Adventure|Family|Fantasy;Hayao Miyazaki;Chieko Baisho|Takuya Kimura|Akihiro Miwa;119;wizard|curse|castle|ghibli;A young woman cursed with old age finds shelter in a wizard's walking castle.;8.2
+Your Name;2016;Animation|Drama|Fantasy|Romance;Makoto Shinkai;Ryunosuke Kamiki|Mone Kamishiraishi|Ryo Narita;106;body swap|time|destiny|anime;Two strangers mysteriously swap bodies and form a bond that stretches across time.;8.4
+Akira;1988;Animation|Action|Sci-Fi;Katsuhiro Otomo;Mitsuo Iwata|Nozomu Sasaki|Mami Koyama;124;cyberpunk|psychic|neo tokyo|anime;In a ruined future Tokyo, a biker gang member gains terrifying psychic powers.;8.0
+Ghost in the Shell;1995;Animation|Action|Sci-Fi;Mamoru Oshii;Atsuko Tanaka|Akio Otsuka|Koichi Yamadera;83;cyberpunk|cyborg|identity|anime;A cyborg agent hunts a mysterious hacker while questioning where her humanity ends.;8.0
+The Grand Budapest Hotel;2014;Adventure|Comedy|Crime;Wes Anderson;Ralph Fiennes|Tony Revolori|F. Murray Abraham;99;concierge|caper|quirky|pastel;A legendary concierge and his lobby boy are tangled up in a stolen painting and a family feud.;8.1
+Amélie;2001;Comedy|Romance;Jean-Pierre Jeunet;Audrey Tautou|Mathieu Kassovitz|Rufus;122;paris|whimsical|kindness|quirky;A shy Parisian waitress secretly arranges small acts of kindness for those around her.;8.3
+Pan's Labyrinth;2006;Drama|Fantasy|War;Guillermo del Toro;Ivana Baquero|Sergi López|Maribel Verdú;118;fairy tale|fascism|dark fantasy|spain;A girl in 1944 Spain escapes into a dark fantasy world while a cruel captain hunts rebels nearby.;8.2
+The Shape of Water;2017;Adventure|Drama|Fantasy|Romance;Guillermo del Toro;Sally Hawkins|Michael Shannon|Richard Jenkins;123;creature|cold war|mute|romance;A mute cleaner at a government lab forms a tender bond with a captive amphibious creature.;7.3
+Get Out;2017;Horror|Mystery|Thriller;Jordan Peele;Daniel Kaluuya|Allison Williams|Catherine Keener;104;social horror|race|suburbia|twist;A young man visiting his girlfriend's family begins to suspect something sinister behind their warmth.;7.8
+Us;2019;Horror|Mystery|Thriller;Jordan Peele;Lupita Nyong'o|Winston Duke|Elisabeth Moss;116;doppelganger|home invasion|horror|allegory;A family on vacation is stalked by violent doubles of themselves.;6.8
+Hereditary;2018;Drama|Horror|Mystery;Ari Aster;Toni Collette|Alex Wolff|Milly Shapiro;127;grief|occult|family|slow burn;After a matriarch's death, a family unravels as terrifying secrets about their lineage come to light.;7.3
+The Shining;1980;Horror|Mystery|Thriller;Stanley Kubrick;Jack Nicholson|Shelley Duvall|Danny Lloyd;146;haunted hotel|isolation|madness|stephen king;A writer taking a winter caretaker job at a remote hotel slowly loses his mind.;8.4
+A Quiet Place;2018;Drama|Horror|Sci-Fi;John Krasinski;Emily Blunt|John Krasinski|Millicent Simmonds;90;silence|monsters|family|survival;A family lives in near-total silence to avoid creatures that hunt by sound.;7.5
+It;2017;Horror;Andy Muschietti;Jaeden Martell|Bill Skarsgård|Finn Wolfhard;135;clown|childhood fear|small town|stephen king;A group of outcast kids band together to face a shape-shifting evil that preys on their town.;7.3
+The Conjuring;2013;Horror|Mystery|Thriller;James Wan;Vera Farmiga|Patrick Wilson|Lili Taylor;112;haunted house|paranormal|demonologists|true story;Paranormal investigators help a family terrorized by a dark presence in their farmhouse.;7.5
+Psycho;1960;Horror|Mystery|Thriller;Alfred Hitchcock;Anthony Perkins|Janet Leigh|Vera Miles;109;motel|twist|hitchcock|classic;A woman on the run checks into an isolated motel run by a shy young man and his domineering mother.;8.5
+Rear Window;1954;Mystery|Thriller;Alfred Hitchcock;James Stewart|Grace Kelly|Raymond Burr;112;voyeur|hitchcock|neighbors|classic;A photographer confined to his apartment becomes convinced a neighbor has committed murder.;8.5
+Casablanca;1942;Drama|Romance|War;Michael Curtiz;Humphrey Bogart|Ingrid Bergman|Paul Henreid;102;classic|love triangle|world war ii|sacrifice;A cynical club owner in wartime Morocco must choose between love and doing the right thing.;8.5
+Citizen Kane;1941;Drama|Mystery;Orson Welles;Orson Welles|Joseph Cotten|Dorothea Comingore;119;classic|media tycoon|rosebud|legacy;Reporters try to decode the last word of a press tycoon to understand the man behind the empire.;8.3
+12 Angry Men;1957;Crime|Drama;Sidney Lumet;Henry Fonda|Lee J. Cobb|Martin Balsam;96;jury|courtroom|prejudice|single room;A lone juror challenges eleven others to reconsider a seemingly open-and-shut murder case.;9.0
+One Flew Over the Cuckoo's Nest;1975;Drama;Milos Forman;Jack Nicholson|Louise Fletcher|Will Sampson;133;asylum|rebellion|authority|classic;A rebellious patient shakes up a rigid psychiatric ward and clashes with its domineering nurse.;8.7
+Taxi Driver;1976;Crime|Drama;Martin Scorsese;Robert De Niro|Jodie Foster|Cybill Shepherd;114;loneliness|new york|vigilante|anti hero;An insomniac veteran drives a cab through a decaying city and drifts toward violence.;8.2
+Apocalypse Now;1979;Drama|War;Francis Ford Coppola;Martin Sheen|Marlon Brando|Robert Duvall;147;vietnam|madness|river journey|war;A captain is sent up a river to terminate a renegade colonel who has gone beyond all control.;8.4
+Saving Private Ryan;1998;Drama|War;Steven Spielberg;Tom Hanks|Matt Damon|Tom Sizemore;169;world war ii|d-day|rescue mission|brotherhood;A squad crosses war-torn France to bring one paratrooper home after his brothers have died in combat.;8.6
+1917;2019;Drama|War;Sam Mendes;George MacKay|Dean-Charles Chapman|Mark Strong;119;world war i|one shot|mission|trenches;Two young soldiers race across enemy territory to deliver a message that could save 1,600 men.;8.2
+Dunkirk;2017;Action|Drama|History;Christopher Nolan;Fionn Whitehead|Tom Hardy|Cillian Murphy;106;evacuation|world war ii|survival|three timelines;Soldiers on a beach, civilian sailors and fighter pilots struggle to escape the German advance.;7.8
+Oppenheimer;2023;Biography|Drama|History;Christopher Nolan;Cillian Murphy|Emily Blunt|Robert Downey Jr.;180;atomic bomb|physicist|guilt|manhattan project;The brilliant physicist behind the first atomic bomb grapples with the weight of what he created.;8.3
+Dune;2021;Action|Adventure|Sci-Fi;Denis Villeneuve;Timothée Chalamet|Zendaya|Rebecca Ferguson;155;desert planet|prophecy|spice|epic;A noble heir takes control of a dangerous desert world where a precious resource shapes empires.;8.0
+Dune: Part Two;2024;Action|Adventure|Sci-Fi;Denis Villeneuve;Timothée Chalamet|Zendaya|Austin Butler;166;desert planet|war|prophecy|epic;Paul joins the Fremen to avenge his family, torn between love and the terrible path he foresees.;8.5
+Arrival;2016;Drama|Mystery|Sci-Fi;Denis Villeneuve;Amy Adams|Jeremy Renner|Forest Whitaker;116;aliens|linguistics|time|first contact;A linguist is recruited to communicate with mysterious visitors whose language may rewrite her sense of time.;7.9
+Ex Machina;2014;Drama|Sci-Fi|Thriller;Alex Garland;Alicia Vikander|Domhnall Gleeson|Oscar Isaac;108;artificial intelligence|turing test|isolation|twist;A programmer is asked to evaluate whether a humanoid AI built by a reclusive genius is truly conscious.;7.7
+Her;2013;Drama|Romance|Sci-Fi;Spike Jonze;Joaquin Phoenix|Scarlett Johansson|Amy Adams;126;artificial intelligence|loneliness|love|near future;A lonely writer falls in love with an intelligent operating system designed to meet his every need.;8.0
+The Truman Show;1998;Comedy|Drama|Sci-Fi;Peter Weir;Jim Carrey|Ed Harris|Laura Linney;103;reality tv|surveillance|free will|satire;A man slowly discovers that his entire life is a television show watched by millions.;8.2
+Eternal Sunshine of the Spotless Mind;2004;Drama|Romance|Sci-Fi;Michel Gondry;Jim Carrey|Kate Winslet|Kirsten Dunst;108;memory erasure|heartbreak|nonlinear|love;After a painful breakup, a man undergoes a procedure to erase his ex from memory and regrets it midway.;8.3
+Good Will Hunting;1997;Drama|Romance;Gus Van Sant;Matt Damon|Robin Williams|Ben Affleck;126;genius|therapy|friendship|working class;A janitor with a gift for mathematics is helped by an unconventional therapist to face his past.;8.3
+Dead Poets Society;1989;Comedy|Drama;Peter Weir;Robin Williams|Ethan Hawke|Robert Sean Leonard;128;boarding school|poetry|teacher|conformity;An inspiring English teacher encourages his students at a strict prep school to seize the day.;8.1
+The Pursuit of Happyness;2006;Biography|Drama;Gabriele Muccino;Will Smith|Jaden Smith|Thandiwe Newton;117;homeless|father son|perseverance|true story;A struggling salesman and his young son endure homelessness while he pursues a dream career.;8.0
+A Beautiful Mind;2001;Biography|Drama|Romance;Ron Howard;Russell Crowe|Ed Harris|Jennifer Connelly;135;mathematician|schizophrenia|genius|true story;A brilliant mathematician battles paranoid schizophrenia while striving for a groundbreaking idea.;8.2
+The Green Mile;1999;Crime|Drama|Fantasy;Frank Darabont;Tom Hanks|Michael Clarke Duncan|David Morse;189;death row|miracle|stephen king|compassion;A death-row guard discovers an inmate with an extraordinary gift that challenges his understanding of justice.;8.6
+Léon: The Professional;1994;Action|Crime|Drama;Luc Besson;Jean Reno|Natalie Portman|Gary Oldman;110;hitman|young girl|new york|protector;A reclusive hitman reluctantly takes in a young neighbor whose family has been murdered.;8.5
+The Usual Suspects;1995;Crime|Mystery|Thriller;Bryan Singer;Kevin Spacey|Gabriel Byrne|Benicio del Toro;106;lineup|keyser soze|twist|heist;A survivor tells police an elaborate tale of a mysterious crime lord behind a deadly ambush.;8.5
+Heat;1995;Action|Crime|Drama;Michael Mann;Al Pacino|Robert De Niro|Val Kilmer;170;heist|cat and mouse|los angeles|rivals;An obsessive detective and a disciplined thief circle each other across Los Angeles before a final showdown.;8.3
+No Country for Old Men;2007;Crime|Drama|Thriller;Joel Coen|Ethan Coen;Tommy Lee Jones|Javier Bardem|Josh Brolin;122;texas|hitman|cat and mouse|bleak;A hunter stumbles on drug money in the desert and is pursued by a relentless killer.;8.2
+Fargo;1996;Crime|Drama|Thriller;Joel Coen|Ethan Coen;Frances McDormand|William H. Macy|Steve Buscemi;98;kidnapping|dark comedy|minnesota|small town;A pregnant police chief unravels a botched kidnapping scheme in the snowy Midwest.;8.1
+The Big Lebowski;1998;Comedy|Crime;Joel Coen|Ethan Coen;Jeff Bridges|John Goodman|Julianne Moore;117;cult classic|slacker|mistaken identity|bowling;A laid-back slacker is mistaken for a millionaire and dragged into a farcical kidnapping plot.;8.1
+Knives Out;2019;Comedy|Crime|Mystery;Rian Johnson;Daniel Craig|Chris Evans|Ana de Armas;130;whodunit|family|detective|ensemble;A famed detective investigates the death of a wealthy novelist surrounded by greedy relatives.;7.9
+Gone Girl;2014;Drama|Mystery|Thriller;David Fincher;Ben Affleck|Rosamund Pike|Neil Patrick Harris;149;missing wife|marriage|media|twist;A man becomes the prime suspect when his wife disappears on their fifth anniversary.;8.1
+Shutter Island;2010;Mystery|Thriller;Martin Scorsese;Leonardo DiCaprio|Mark Ruffalo|Ben Kingsley;138;asylum|island|paranoia|twist;A U.S. Marshal investigates a patient's disappearance from a remote psychiatric hospital.;8.2
+Prisoners;2013;Crime|Drama|Mystery;Denis Villeneuve;Hugh Jackman|Jake Gyllenhaal|Paul Dano;153;kidnapping|vigilante|detective|dark;A desperate father takes matters into his own hands when police fail to find his missing daughter.;8.1
+Nightcrawler;2014;Crime|Drama|Thriller;Dan Gilroy;Jake Gyllenhaal|Rene Russo|Riz Ahmed;117;crime journalism|sociopath|los angeles|ambition;A driven drifter finds his calling filming crime scenes and crosses ever darker lines for the shot.;7.8
+Drive;2011;Action|Crime|Drama;Nicolas Winding Refn;Ryan Gosling|Carey Mulligan|Bryan Cranston;100;getaway driver|neo noir|synth|violence;A stunt driver who moonlights as a getaway man gets entangled with a dangerous crowd to protect a neighbor.;7.8
+John Wick;2014;Action|Crime|Thriller;Chad Stahelski;Keanu Reeves|Michael Nyqvist|Alfie Allen;101;revenge|hitman|dog|stylized action;A retired hitman returns to the underworld after thugs kill his dog, the last gift from his late wife.;7.4
+Die Hard;1988;Action|Thriller;John McTiernan;Bruce Willis|Alan Rickman|Bonnie Bedelia;132;skyscraper|hostage|christmas|one man army;A New York cop battles terrorists who seize a Los Angeles skyscraper during a holiday party.;8.2
+Mission: Impossible - Fallout;2018;Action|Adventure|Thriller;Christopher McQuarrie;Tom Cruise|Henry Cavill|Ving Rhames;147;spy|stunts|nuclear|global chase;An IMF team scrambles to stop a plutonium plot as a mission goes wrong.;7.7
+Top Gun: Maverick;2022;Action|Drama;Joseph Kosinski;Tom Cruise|Miles Teller|Jennifer Connelly;130;fighter pilots|legacy|aerial combat|sequel;A veteran pilot trains a squad of young graduates for a near-impossible strike mission.;8.2
+Casino Royale;2006;Action|Adventure|Thriller;Martin Campbell;Daniel Craig|Eva Green|Mads Mikkelsen;144;spy|poker|origin|bond;A newly minted 00 agent faces a banker to terrorists at a high-stakes poker table.;8.0
+Skyfall;2012;Action|Adventure|Thriller;Sam Mendes;Daniel Craig|Javier Bardem|Judi Dench;143;spy|bond|revenge|mi6;Bond must defend MI6 when a former agent seeks personal revenge on M.;7.8
+Pirates of the Caribbean: The Curse of the Black Pearl;2003;Action|Adventure|Fantasy;Gore Verbinski;Johnny Depp|Orlando Bloom|Keira Knightley;143;pirates|curse|swashbuckler|treasure;A blacksmith teams with an eccentric pirate to rescue a governor's daughter from cursed buccaneers.;8.1
+Harry Potter and the Sorcerer's Stone;2001;Adventure|Family|Fantasy;Chris Columbus;Daniel Radcliffe|Emma Watson|Rupert Grint;152;wizard school|chosen one|magic|friendship;An orphan discovers he is a wizard and begins his first year at a school of magic.;7.6
+Harry Potter and the Prisoner of Azkaban;2004;Adventure|Family|Fantasy;Alfonso Cuarón;Daniel Radcliffe|Emma Watson|Gary Oldman;142;wizard school|time turner|prisoner|magic;A wizard prisoner has escaped, and everyone believes he is coming for Harry.;7.9
+The Hobbit: An Unexpected Journey;2012;Adventure|Fantasy;Peter Jackson;Martin Freeman|Ian McKellen|Richard Armitage;169;dwarves|dragon|quest|middle earth;A reluctant homebody joins thirteen dwarves on a quest to reclaim their mountain home from a dragon.;7.8
+The Princess Bride;1987;Adventure|Comedy|Family|Fantasy;Rob Reiner;Cary Elwes|Robin Wright|Mandy Patinkin;98;fairy tale|swordfights|true love|cult classic;A grandfather reads his sick grandson a tale of true love, pirates, giants and sword duels.;8.0
+Shrek;2001;Animation|Adventure|Comedy|Family;Andrew Adamson|Vicky Jenson;Mike Myers|Eddie Murphy|Cameron Diaz;90;ogre|fairy tale parody|friendship|satire;A grumpy ogre sets out to rescue a princess so he can get his swamp back.;7.9
+How to Train Your Dragon;2010;Animation|Adventure|Family|Fantasy;Dean DeBlois|Chris Sanders;Jay Baruchel|Gerard Butler|America Ferrera;98;dragons|vikings|friendship|coming of age;A Viking teen befriends a wounded dragon and challenges his village's centuries-old war.;8.1
+Ratatouille;2007;Animation|Comedy|Family|Fantasy;Brad Bird;Patton Oswalt|Lou Romano|Ian Holm;111;cooking|paris|underdog|pixar;A rat with a refined palate teams up with a clumsy kitchen boy to cook in a famous Paris restaurant.;8.1
+The Incredibles;2004;Animation|Action|Adventure|Family;Brad Bird;Craig T. Nelson|Holly Hunter|Samuel L. Jackson;115;superheroes|family|midlife|pixar;A family of retired superheroes is drawn back into action to stop a vengeful fan.;8.0
+Monsters, Inc.;2001;Animation|Adventure|Comedy|Family;Pete Docter;Billy Crystal|John Goodman|Mary Gibbs;92;monsters|scare factory|friendship|pixar;Two monsters who power their city with children's screams must protect a toddler who wandered in.;8.1
+Zootopia;2016;Animation|Adventure|Comedy|Family;Byron Howard|Rich Moore;Ginnifer Goodwin|Jason Bateman|Idris Elba;108;detective|animals|prejudice|buddy cop;A rabbit cop and a con-artist fox uncover a conspiracy in a city where predators and prey coexist.;8.0
+Frozen;2013;Animation|Adventure|Comedy|Family;Chris Buck|Jennifer Lee;Kristen Bell|Idina Menzel|Jonathan Groff;102;sisters|ice magic|musical|snow;A fearless princess sets off to find her sister, whose icy powers have trapped the kingdom in winter.;7.4
+Bohemian Rhapsody;2018;Biography|Drama|Music;Bryan Singer;Rami Malek|Lucy Boynton|Gwilym Lee;134;rock band|biopic|queen|fame;The rise of a legendary rock band and its charismatic frontman, from first gig to a historic benefit concert.;7.9
+A Star Is Born;2018;Drama|Music|Romance;Bradley Cooper;Bradley Cooper|Lady Gaga|Sam Elliott;136;singer|fame|addiction|love;A seasoned musician discovers a talented unknown singer and falls in love as her career soars and his declines.;7.6
+The Notebook;2004;Drama|Romance;Nick Cassavetes;Ryan Gosling|Rachel McAdams|James Garner;123;first love|class divide|memory|tearjerker;A poor young man and a wealthy girl fall in love one summer, a story an old man reads to a woman with dementia.;7.8
+Pride & Prejudice;2005;Drama|Romance;Joe Wright;Keira Knightley|Matthew Macfadyen|Brenda Blethyn;129;regency|period drama|class|slow burn romance;A spirited young woman and a proud gentleman misjudge each other in Regency England.;7.8
+Before Sunrise;1995;Drama|Romance;Richard Linklater;Ethan Hawke|Julie Delpy|Andrea Eckert;101;one night|vienna|conversation|romance;Two strangers meet on a train and spend one night wandering Vienna talking about life and love.;8.1
+When Harry Met Sally...;1989;Comedy|Romance;Rob Reiner;Billy Crystal|Meg Ryan|Carrie Fisher;96;friendship|new york|romcom|classic;Two friends spend years debating whether men and women can ever be just friends.;7.7
+Crazy Rich Asians;2018;Comedy|Drama|Romance;Jon M. Chu;Constance Wu|Henry Golding|Michelle Yeoh;120;wealth|singapore|family|romcom;A professor travels to Singapore to meet her boyfriend's family and discovers he is heir to a fortune.;6.9
+Superbad;2007;Comedy;Greg Mottola;Jonah Hill|Michael Cera|Christopher Mintz-Plasse;113;teen comedy|high school|party|friendship;Two high-school best friends try to score alcohol for a party before graduation splits them up.;7.6
+The Hangover;2009;Comedy;Todd Phillips;Bradley Cooper|Ed Helms|Zach Galifianakis;100;bachelor party|las vegas|mystery|raunchy;Three groomsmen wake up after a bachelor party with no memory and a missing groom.;7.7
+Anchorman: The Legend of Ron Burgundy;2004;Comedy;Adam McKay;Will Ferrell|Christina Applegate|Paul Rudd;94;newsroom|1970s|absurd|cult classic;A swaggering 1970s San Diego anchor's world is rocked by an ambitious female reporter.;7.2
+Bridesmaids;2011;Comedy|Romance;Paul Feig;Kristen Wiig|Maya Rudolph|Melissa McCarthy;125;wedding|friendship|raunchy|ensemble;A maid of honor's life unravels as she competes with a rival to plan her best friend's wedding.;6.8
+3 Idiots;2009;Comedy|Drama;Rajkumar Hirani;Aamir Khan|R. Madhavan|Sharman Joshi;170;engineering college|friendship|education|bollywood;Two friends search for their long-lost college buddy who taught them to chase excellence, not grades.;8.4
+Dangal;2016;Action|Biography|Drama;Nitesh Tiwari;Aamir Khan|Fatima Sana Shaikh|Sanya Malhotra;161;wrestling|father daughters|sports|bollywood;A former wrestler trains his daughters to become world-class champions against social odds.;8.3
+Lagaan;2001;Adventure|Drama|Music;Ashutosh Gowariker;Aamir Khan|Gracy Singh|Rachel Shelley;224;cricket|colonial india|underdog|bollywood;Villagers in colonial India accept a cricket challenge from British officers to escape crushing taxes.;8.1
+Dil Chahta Hai;2001;Comedy|Drama|Romance;Farhan Akhtar;Aamir Khan|Saif Ali Khan|Akshaye Khanna;183;friendship|coming of age|goa|bollywood;Three close friends drift apart and find their way back as love reshapes their lives.;8.1
+Zindagi Na Milegi Dobara;2011;Adventure|Comedy|Drama;Zoya Akhtar;Hrithik Roshan|Farhan Akhtar|Abhay Deol;155;road trip|friendship|spain|bollywood;Three friends on a bachelor road trip across Spain confront fears and rediscover life.;8.2
+RRR;2022;Action|Adventure|Drama;S. S. Rajamouli;N. T. Rama Rao Jr.|Ram Charan|Alia Bhatt;182;colonial india|friendship|spectacle|tollywood;Two revolutionaries form an unlikely friendship before fate pits them against each other in the fight against the British.;7.8
+Baahubali: The Beginning;2015;Action|Adventure|Drama;S. S. Rajamouli;Prabhas|Rana Daggubati|Anushka Shetty;159;epic|kingdom|destiny|tollywood;A young man raised in a village discovers his royal lineage and a kingdom torn by betrayal.;8.0
+Gully Boy;2019;Drama|Music;Zoya Akhtar;Ranveer Singh|Alia Bhatt|Siddhant Chaturvedi;153;rap|mumbai|slum|underdog;A young man from Mumbai's slums finds his voice through street rap.;7.9
+Andhadhun;2018;Comedy|Crime|Thriller;Sriram Raghavan;Ayushmann Khurrana|Tabu|Radhika Apte;139;blind pianist|dark comedy|twist|bollywood;A pianist who pretends to be blind becomes entangled in a murder and a web of lies.;8.2
+Drishyam;2015;Crime|Drama|Mystery;Nishikant Kamat;Ajay Devgn|Tabu|Shriya Saran;163;family|cover-up|police|thriller;A cable operator goes to extraordinary lengths to protect his family after an accident.;8.2
+Taare Zameen Par;2007;Drama|Family;Aamir Khan;Darsheel Safary|Aamir Khan|Tisca Chopra;165;dyslexia|childhood|teacher|bollywood;A teacher discovers the hidden talent of a struggling, dyslexic child.;8.3
+Oldboy;2003;Action|Drama|Mystery;Park Chan-wook;Choi Min-sik|Yoo Ji-tae|Kang Hye-jung;120;revenge|imprisonment|twist|korean cinema;A man imprisoned for fifteen years without explanation is suddenly released and hunts his captor.;8.4
+Train to Busan;2016;Action|Horror|Thriller;Yeon Sang-ho;Gong Yoo|Ma Dong-seok|Jung Yu-mi;118;zombies|train|korean cinema|survival;Passengers fight for survival on a speeding train as a zombie outbreak spreads across South Korea.;7.6
+Crouching Tiger, Hidden Dragon;2000;Action|Adventure|Drama|Romance;Ang Lee;Chow Yun-fat|Michelle Yeoh|Zhang Ziyi;120;wuxia|sword|ancient china|romance;A legendary warrior's stolen sword sets off a chase among skilled fighters in imperial China.;7.9
+Seven Samurai;1954;Action|Adventure|Drama;Akira Kurosawa;Toshiro Mifune|Takashi Shimura|Yoshio Inaba;207;samurai|village|classic|honor;A village hires seven masterless samurai to protect it from bandits.;8.6
+City of God;2002;Crime|Drama;Fernando Meirelles;Alexandre Rodrigues|Leandro Firmino|Phellipe Haagensen;130;favela|gangs|brazil|coming of age;Two boys in a Rio favela take very different paths as crime takes over their neighborhood.;8.6
+Life Is Beautiful;1997;Comedy|Drama|Romance|War;Roberto Benigni;Roberto Benigni|Nicoletta Braschi|Giorgio Cantarini;116;holocaust|father son|imagination|tearjerker;A father uses humor and imagination to shield his young son from the horrors of a concentration camp.;8.6
+Cinema Paradiso;1988;Drama|Romance;Giuseppe Tornatore;Philippe Noiret|Salvatore Cascio|Jacques Perrin;155;nostalgia|cinema|sicily|mentor;A filmmaker recalls his childhood friendship with a village projectionist who sparked his love of movies.;8.5
+The Intouchables;2011;Biography|Comedy|Drama;Olivier Nakache|Éric Toledano;François Cluzet|Omar Sy|Anne Le Ny;112;friendship|disability|paris|feel good;A wealthy quadriplegic hires an unlikely caregiver from the projects and both lives change.;8.5
+Everything Everywhere All at Once;2022;Action|Adventure|Comedy|Sci-Fi;Daniel Kwan|Daniel Scheinert;Michelle Yeoh|Stephanie Hsu|Ke Huy Quan;139;multiverse|mother daughter|absurd|existential;A overwhelmed laundromat owner is pulled into a multiverse war and must connect with her daughter to save everything.;7.8
+The Batman;2022;Action|Crime|Drama;Matt Reeves;Robert Pattinson|Zoë Kravitz|Paul Dano;176;batman|detective|gotham|noir;A young vigilante investigates a riddling killer targeting Gotham's elite.;7.8
+Barbie;2023;Adventure|Comedy|Fantasy;Greta Gerwig;Margot Robbie|Ryan Gosling|America Ferrera;114;doll|identity|satire|pastel;A doll in a perfect pink world suffers an existential crisis and travels to the real world.;6.8
+Spider-Man: No Way Home;2021;Action|Adventure|Fantasy;Jon Watts;Tom Holland|Zendaya|Benedict Cumberbatch;148;multiverse|superheroes|marvel|nostalgia;When a spell goes wrong, villains from other universes arrive and Peter Parker must set things right.;8.2
+Gravity;2013;Drama|Sci-Fi|Thriller;Alfonso Cuarón;Sandra Bullock|George Clooney|Ed Harris;91;space|survival|debris|isolation;Two astronauts struggle to survive after debris destroys their shuttle and leaves them drifting in orbit.;7.7
+The Martian;2015;Adventure|Drama|Sci-Fi;Ridley Scott;Matt Damon|Jessica Chastain|Chiwetel Ejiofor;144;mars|survival|science|humor;An astronaut stranded on Mars uses science and humor to survive until rescue can arrive.;8.0
+Edge of Tomorrow;2014;Action|Adventure|Sci-Fi;Doug Liman;Tom Cruise|Emily Blunt|Bill Paxton;113;time loop|alien invasion|soldier|action;A soldier forced to relive the same battle over and over learns to fight back against an alien invasion.;7.9
+Looper;2012;Action|Sci-Fi|Thriller;Rian Johnson;Joseph Gordon-Levitt|Bruce Willis|Emily Blunt;119;time travel|assassin|future self|twist;A hired killer faces his future self as his next target.;7.4
+Minority Report;2002;Action|Mystery|Sci-Fi;Steven Spielberg;Tom Cruise|Colin Farrell|Samantha Morton;145;precrime|future|chase|free will;A cop in a pre-crime unit is accused of a murder he has not yet committed.;7.6
+District 9;2009;Action|Sci-Fi|Thriller;Neill Blomkamp;Sharlto Copley|David James|Jason Cope;112;aliens|apartheid allegory|south africa|documentary style;An agent overseeing the relocation of stranded aliens is infected and becomes a fugitive.;7.9
+The Revenant;2015;Action|Adventure|Drama;Alejandro G. Iñárritu;Leonardo DiCaprio|Tom Hardy|Will Poulter;156;survival|revenge|wilderness|frontier;A frontiersman left for dead after a bear attack crawls through winter wilderness for revenge.;8.0
+Whiplash 2: The Encore Sessions;2025;Drama|Music;Damien Chazelle;Miles Teller|Anya Taylor-Joy|Mahershala Ali;118;jazz|mentor|ambition|sequel;A former student returns to the conservatory to confront the instructor who shaped and scarred him.;7.0
+""".strip()
+
+# Drop the fictional last row so the catalogue only contains real films
+RAW = "\n".join(l for l in RAW.splitlines() if not l.startswith("Whiplash 2"))
+
+
+def parse_movies():
+    rows = []
+    for i, line in enumerate(RAW.splitlines(), start=1):
+        parts = line.split(";")
+        # Some rows list two directors separated by ';' inside the director field.
+        # Normalise: a valid row has exactly 9 fields; if 10, merge director fields.
+        if len(parts) == 10:
+            parts = [parts[0], parts[1], parts[2], parts[3] + "|" + parts[4]] + parts[5:]
+        # Some rows have 8 fields (two directors written with '|' and a cast missing never happens) -> guard
+        if len(parts) != 9:
+            raise ValueError(f"Bad row {i}: {len(parts)} fields -> {line[:80]}")
+        title, year, genres, director, cast, runtime, keywords, overview, rating = parts
+        rows.append(
+            dict(
+                movie_id=i,
+                title=title.strip(),
+                year=int(year),
+                genres=genres.strip(),
+                director=director.strip(),
+                cast=cast.strip(),
+                runtime=int(runtime),
+                keywords=keywords.strip(),
+                overview=overview.strip(),
+                avg_rating=float(rating),
+            )
+        )
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Synthetic ratings
+# ---------------------------------------------------------------------------
+PERSONAS = {
+    # persona: genre weights (affinity from -1 to +1)
+    "blockbuster_fan": {"Action": 1, "Adventure": 1, "Sci-Fi": 0.7, "Fantasy": 0.5, "Drama": -0.2, "Horror": -0.3, "Romance": -0.4},
+    "cinephile": {"Drama": 1, "Mystery": 0.6, "Biography": 0.7, "War": 0.6, "Crime": 0.5, "Animation": -0.1, "Comedy": -0.2},
+    "horror_thriller": {"Horror": 1, "Thriller": 1, "Mystery": 0.8, "Crime": 0.6, "Family": -0.8, "Romance": -0.5, "Animation": -0.4},
+    "family_animation": {"Animation": 1, "Family": 1, "Adventure": 0.6, "Fantasy": 0.7, "Comedy": 0.4, "Horror": -0.9, "Crime": -0.5},
+    "romcom_lover": {"Romance": 1, "Comedy": 1, "Music": 0.6, "Drama": 0.2, "Horror": -0.7, "War": -0.5, "Action": -0.3},
+    "scifi_nerd": {"Sci-Fi": 1, "Fantasy": 0.5, "Mystery": 0.5, "Adventure": 0.5, "Thriller": 0.3, "Romance": -0.3, "Comedy": -0.1},
+    "crime_buff": {"Crime": 1, "Thriller": 0.8, "Drama": 0.5, "Mystery": 0.6, "Western": 0.4, "Family": -0.7, "Animation": -0.5},
+}
+
+
+def build_ratings(movies, n_users=600, seed=42):
+    rng = random.Random(seed)
+    np_rng = np.random.default_rng(seed)
+    persona_names = list(PERSONAS)
+    movie_genres = [set(m["genres"].split("|")) for m in movies]
+    # popularity prior: well-rated films get seen more often
+    pop = np.array([(m["avg_rating"] - 5) ** 2 for m in movies])
+    pop = pop / pop.sum()
+
+    rows = []
+    for uid in range(1, n_users + 1):
+        persona = PERSONAS[rng.choice(persona_names)]
+        # secondary persona blend gives users mixed taste
+        persona2 = PERSONAS[rng.choice(persona_names)]
+        blend = rng.uniform(0.0, 0.35)
+        bias = rng.uniform(-0.4, 0.4)
+        n_seen = int(np.clip(np_rng.normal(28, 10), 8, 60))
+        # Users preferentially watch films matching their taste
+        weights = []
+        for mi, g in enumerate(movie_genres):
+            aff = np.mean([(1 - blend) * persona.get(x, 0) + blend * persona2.get(x, 0) for x in g])
+            weights.append(pop[mi] * np.exp(1.6 * aff))
+        weights = np.array(weights)
+        weights = weights / weights.sum()
+        picks = np_rng.choice(len(movies), size=min(n_seen, len(movies)), replace=False, p=weights)
+        for mi in picks:
+            m = movies[mi]
+            aff = np.mean([(1 - blend) * persona.get(x, 0) + blend * persona2.get(x, 0) for x in movie_genres[mi]])
+            quality = (m["avg_rating"] - 7.5) * 0.45
+            raw = 3.4 + 1.4 * aff + quality + bias + np_rng.normal(0, 0.55)
+            rating = float(np.clip(round(raw * 2) / 2, 0.5, 5.0))
+            rows.append((uid, m["movie_id"], rating))
+    return rows
+
+
+def main():
+    movies = parse_movies()
+    with open(os.path.join(HERE, "movies.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(movies[0].keys()))
+        w.writeheader()
+        w.writerows(movies)
+    ratings = build_ratings(movies)
+    with open(os.path.join(HERE, "ratings.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["user_id", "movie_id", "rating"])
+        w.writerows(ratings)
+    print(f"movies.csv  -> {len(movies)} movies")
+    print(f"ratings.csv -> {len(ratings)} ratings from {len({r[0] for r in ratings})} users")
+
+
+if __name__ == "__main__":
+    main()
